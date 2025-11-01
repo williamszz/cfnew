@@ -999,16 +999,102 @@ async function handleSubscriptionRequest(request, user, url = null) {
         }
     }
 
-    if (fallbackAddress && fallbackPort) {
-        const fallbackList = [{ 
-            ip: fallbackAddress, 
-            isp: 'Fallback-' + (fallbackAddress.includes('.') ? 'IPv4' : 'IPv6'),
-            port: parseInt(fallbackPort, 10)
-        }];
-        await addNodesFromList(fallbackList);
-    } else {
+    if (currentWorkerRegion === 'CUSTOM') {
         const nativeList = [{ ip: workerDomain, isp: '原生地址' }];
         await addNodesFromList(nativeList);
+    } else {
+        try {
+            const nativeList = [{ ip: workerDomain, isp: '原生地址' }];
+            await addNodesFromList(nativeList);
+        } catch (error) {
+            if (!currentWorkerRegion) {
+                currentWorkerRegion = await detectWorkerRegion(request);
+            }
+            
+            const bestBackupIP = await getBestBackupIP(currentWorkerRegion);
+            if (bestBackupIP) {
+                fallbackAddress = bestBackupIP.domain;
+                fallbackPort = bestBackupIP.port.toString();
+                const backupList = [{ ip: fallbackAddress, isp: 'ProxyIP-' + currentWorkerRegion }];
+                await addNodesFromList(backupList);
+            } else {
+                const nativeList = [{ ip: workerDomain, isp: '原生地址' }];
+                await addNodesFromList(nativeList);
+            }
+        }
+    }
+
+    const hasCustomPreferred = customPreferredIPs.length > 0 || customPreferredDomains.length > 0;
+    
+    if (disablePreferred) {
+    } else if (hasCustomPreferred) {
+        
+        if (customPreferredIPs.length > 0 && epi) {
+            await addNodesFromList(customPreferredIPs);
+        }
+        
+        if (customPreferredDomains.length > 0 && epd) {
+            const customDomainList = customPreferredDomains.map(d => ({ ip: d.domain, isp: d.name || d.domain }));
+            await addNodesFromList(customDomainList);
+        }
+    } else {
+        
+        if (epd) {
+        const domainList = directDomains.map(d => ({ ip: d.domain, isp: d.name || d.domain }));
+            await addNodesFromList(domainList);
+        }
+
+        if (epi) {
+        const defaultURL = 'https://raw.githubusercontent.com/qwer-search/bestip/refs/heads/main/kejilandbestip.txt';
+            if (piu === defaultURL) {
+            try {
+                const dynamicIPList = await fetchDynamicIPs();
+                if (dynamicIPList.length > 0) {
+                        await addNodesFromList(dynamicIPList);
+                }
+            } catch (error) {
+                if (!currentWorkerRegion) {
+                    currentWorkerRegion = await detectWorkerRegion(request);
+                }
+                
+                const bestBackupIP = await getBestBackupIP(currentWorkerRegion);
+                if (bestBackupIP) {
+                    fallbackAddress = bestBackupIP.domain;
+                    fallbackPort = bestBackupIP.port.toString();
+                    
+                    const backupList = [{ ip: fallbackAddress, isp: 'ProxyIP-' + currentWorkerRegion }];
+                        await addNodesFromList(backupList);
+                    }
+                }
+            }
+        }
+
+        if (egi) {
+        try {
+            const newIPList = await fetchAndParseNewIPs();
+            if (newIPList.length > 0) {
+                    if (ev) {
+                finalLinks.push(...generateLinksFromNewIPs(newIPList, user, workerDomain));
+                    }
+                    if (et) {
+                        finalLinks.push(...await generateTrojanLinksFromNewIPs(newIPList, user, workerDomain));
+                    }
+            }
+        } catch (error) {
+            if (!currentWorkerRegion) {
+                currentWorkerRegion = await detectWorkerRegion(request);
+            }
+            
+            const bestBackupIP = await getBestBackupIP(currentWorkerRegion);
+            if (bestBackupIP) {
+                fallbackAddress = bestBackupIP.domain;
+                fallbackPort = bestBackupIP.port.toString();
+                
+                const backupList = [{ ip: fallbackAddress, isp: 'ProxyIP-' + currentWorkerRegion }];
+                    await addNodesFromList(backupList);
+                }
+            }
+        }
     }
 
     if (finalLinks.length === 0) {
@@ -1076,18 +1162,29 @@ function generateLinksFromSource(list, user, workerDomain) {
         
         let portsToGenerate = [];
         
-        if (fallbackPort) {
-            const port = parseInt(fallbackPort, 10);
-            if (port === 443 || CF_HTTPS_PORTS.includes(port)) {
+        if (item.port) {
+            
+            const port = item.port;
+            
+            if (CF_HTTPS_PORTS.includes(port)) {
+                
                 portsToGenerate.push({ port: port, tls: true });
-            } else if (CF_HTTP_PORTS.includes(port) && !disableNonTLS) {
-                portsToGenerate.push({ port: port, tls: false });
+            } else if (CF_HTTP_PORTS.includes(port)) {
+                
+                if (!disableNonTLS) {
+                    portsToGenerate.push({ port: port, tls: false });
+                }
             } else {
+                
                 portsToGenerate.push({ port: port, tls: true });
             }
         } else {
+            
             defaultHttpsPorts.forEach(port => {
                 portsToGenerate.push({ port: port, tls: true });
+            });
+            defaultHttpPorts.forEach(port => {
+                portsToGenerate.push({ port: port, tls: false });
             });
         }
 
@@ -1278,7 +1375,7 @@ async function handleWsRequest(request) {
             const respHeader = new Uint8Array([version[0], 0]);
             const rawData = chunk.slice(rawIndex);
             if (isDnsQuery) return forwardUDP(rawData, serverSock, respHeader);
-            await forwardTCPThroughFallback(addressType, hostname, port, rawData, serverSock, respHeader, remoteConnWrapper);
+            await forwardTCP(addressType, hostname, port, rawData, serverSock, respHeader, remoteConnWrapper);
                         return;
                     }
                 }
@@ -1288,7 +1385,7 @@ async function handleWsRequest(request) {
                     if (!tjResult.hasError) {
                         protocolType = atob('dHJvamFu');
                         const { addressType, port, hostname, rawClientData } = tjResult;
-                        await forwardTCPThroughFallback(addressType, hostname, port, rawClientData, serverSock, null, remoteConnWrapper);
+                        await forwardTCP(addressType, hostname, port, rawClientData, serverSock, null, remoteConnWrapper);
                         return;
                     }
                 }
@@ -1301,30 +1398,6 @@ async function handleWsRequest(request) {
     return new Response(null, { status: 101, webSocket: clientSock });
 }
 
-async function forwardTCPThroughFallback(addrType, host, portNum, rawData, ws, respHeader, remoteConnWrapper) {
-    async function connectAndSend() {
-        // 直接使用 fallbackAddress 和 fallbackPort
-        const remoteSock = connect({ 
-            hostname: fallbackAddress, 
-            port: parseInt(fallbackPort, 10) || 443 
-        });
-        const writer = remoteSock.writable.getWriter();
-        await writer.write(rawData);
-        writer.releaseLock();
-        return remoteSock;
-    }
-    
-    try {
-        const remoteSock = await connectAndSend();
-        remoteConnWrapper.socket = remoteSock;
-        remoteSock.closed.catch(() => {}).finally(() => closeSocketQuietly(ws));
-        connectStreams(remoteSock, ws, respHeader, null);
-    } catch (err) {
-        // 如果 fallback 也失败，直接关闭连接
-        closeSocketQuietly(ws);
-    }
-}
-
 async function forwardTCP(addrType, host, portNum, rawData, ws, respHeader, remoteConnWrapper) {
     async function connectAndSend(address, port, useSocks = false) {
         const remoteSock = useSocks ?
@@ -1335,7 +1408,31 @@ async function forwardTCP(addrType, host, portNum, rawData, ws, respHeader, remo
         writer.releaseLock();
         return remoteSock;
     }
-    
+
+// 如果SOCKS5代理可用，则强制使用SOCKS5代理
+  if (isSocksEnabled) {
+    try {
+      const remoteSock = await connectAndSend(host, portNum, true); // 使用SOCKS5
+      remoteConnWrapper.socket = remoteSock;
+      remoteSock.closed.catch(() => {}).finally(() => closeSocketQuietly(ws));
+      connectStreams(remoteSock, ws, respHeader, null);
+    } catch (err) {
+      // SOCKS5代理失败，可以尝试fallback或者直接关闭
+      // 这里可以根据需要决定是否使用fallback
+      if (fallbackAddress && fallbackPort) {
+        try {
+          const fallbackSocket = await connectAndSend(fallbackAddress, parseInt(fallbackPort, 10), true); // fallback也使用SOCKS5？
+          remoteConnWrapper.socket = fallbackSocket;
+          fallbackSocket.closed.catch(() => {}).finally(() => closeSocketQuietly(ws));
+          connectStreams(fallbackSocket, ws, respHeader, null);
+        } catch (fallbackErr) {
+          closeSocketQuietly(ws);
+        }
+      } else {
+        closeSocketQuietly(ws);
+      }
+    }
+  } else {
     async function retryConnection() {
         if (enableSocksDowngrade && isSocksEnabled) {
             try {
@@ -1385,7 +1482,8 @@ async function forwardTCP(addrType, host, portNum, rawData, ws, respHeader, remo
             }
         }
     }
-    
+}
+
     try {
         const initialSocket = await connectAndSend(host, portNum, enableSocksDowngrade ? false : isSocksEnabled);
         remoteConnWrapper.socket = initialSocket;
@@ -2991,10 +3089,7 @@ async function connect_to_remote_xhttp(httpx, ...remotes) {
     let attempt = 0;
     let lastErr;
     
-    const connectionList = [fallbackAddress].filter(r => r && r.trim());
-    if (connectionList.length === 0) {
-        connectionList.push('13.230.34.30');
-    }
+    const connectionList = [httpx.hostname, ...remotes.filter(r => r && r !== httpx.hostname)];
     
     for (const hostname of connectionList) {
         if (!hostname) continue;
