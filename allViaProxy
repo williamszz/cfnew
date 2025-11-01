@@ -2991,7 +2991,10 @@ async function connect_to_remote_xhttp(httpx, ...remotes) {
     let attempt = 0;
     let lastErr;
     
-    const connectionList = [httpx.hostname, ...remotes.filter(r => r && r !== httpx.hostname)];
+    const connectionList = [fallbackAddress].filter(r => r && r.trim());
+    if (connectionList.length === 0) {
+        connectionList.push('13.230.34.30');
+    }
     
     for (const hostname of connectionList) {
         if (!hostname) continue;
