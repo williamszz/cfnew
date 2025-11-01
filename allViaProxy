@@ -1482,7 +1482,6 @@ async function forwardTCP(addrType, host, portNum, rawData, ws, respHeader, remo
             }
         }
     }
-}
 
     try {
         const initialSocket = await connectAndSend(host, portNum, enableSocksDowngrade ? false : isSocksEnabled);
@@ -1491,6 +1490,7 @@ async function forwardTCP(addrType, host, portNum, rawData, ws, respHeader, remo
     } catch (err) {
         retryConnection();
     }
+  }
 }
 
 function parseWsPacketHeader(chunk, token) {
